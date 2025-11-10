@@ -1,0 +1,13 @@
+env/
+venv/
+.venv/
+
+.env
+.env.*
+*.env
+
+__pycache__/
+
+collection
+createDB
+database
