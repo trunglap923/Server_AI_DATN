@@ -1,5 +1,5 @@
+from langchain_core.messages import AIMessage
 from chatbot.agents.states.state import AgentState
-from chatbot.models.llm_setup import llm
 import logging
 
 # --- Cấu hình logging ---
@@ -8,32 +8,39 @@ logger = logging.getLogger(__name__)
 
 def generate_final_response(state: AgentState):
     logger.info("---NODE: FINAL RESPONSE---")
-    menu = state["response"]["final_menu"]
-    profile = state["response"]["user_profile"]
+    menu = state.get("final_menu", [])
+    reason = state.get("reason", "")
+    profile = state.get("user_profile", {})
+    
+    if not menu:
+        return {"messages": [AIMessage(content="Xin lỗi, tôi chưa thể tạo thực đơn lúc này.")]}
 
-    # Format text để LLM đọc
-    menu_text = ""
-    current_meal = ""
-    for dish in sorted(menu, key=lambda x: x['assigned_meal']): # Sort theo bữa
-        if dish['assigned_meal'] != current_meal:
-            current_meal = dish['assigned_meal']
-            menu_text += f"\n--- BỮA {current_meal.upper()} ---\n"
+    meal_priority = {"sáng": 1, "trưa": 2, "tối": 3}
+    sorted_menu = sorted(
+        menu,
+        key=lambda x: meal_priority.get(x.get('assigned_meal', '').lower(), 99)
+    )
+    
+    output_text = "📋 **THỰC ĐƠN DINH DƯỠNG CÁ NHÂN HÓA**\n"
+    output_text += f"🎯 Mục tiêu: {int(profile.get('targetcalories', 0))} Kcal | {int(profile.get('protein', 0))}g Protein\n\n"
+    
+    current_meal = None
 
-        menu_text += (
-            f"- {dish['name']} (x{dish['portion_scale']} suất): "
-            f"{dish['final_kcal']}kcal, {dish['final_protein']}g Protein, {dish['final_lipid']}g Lipid, {dish['final_carb']}g Carbohydrate\n"
-        )
+    for dish in sorted_menu:
+        meal_name = dish.get('assigned_meal', 'Khác').upper()
 
-    prompt = f"""
-    Người dùng có mục tiêu: {profile['targetcalories']} Kcal, {profile['protein']}g Protein, {profile['totalfat']}g Lipid, {profile['carbohydrate']}g Carbohydrate.
-    Hệ thống đã tính toán thực đơn tối ưu sau:
+        if meal_name != current_meal:
+            current_meal = meal_name
+            output_text += f"🍽️ **BỮA {current_meal}**:\n"
 
-    {menu_text}
+        scale = dish.get('portion_scale', 1.0)
+        scale_info = f" (x{scale} suất)" if scale != 1.0 else ""
 
-    Nhiệm vụ:
-    1. Trình bày thực đơn này thật đẹp và ngon miệng cho người dùng.
-    2. Giải thích ngắn gọn tại sao khẩu phần lại như vậy (Ví dụ: "Mình đã tăng lượng ức gà lên 1.5 suất để đảm bảo đủ Protein cho bạn").
-    """
+        output_text += f"   • **{dish['name']}**{scale_info}\n"
+        output_text += f"     └─ {dish['final_kcal']} Kcal | {dish['final_protein']}g Đạm | {dish['final_totalfat']}g Béo | {dish['final_carbs']}g Bột\n"
 
-    res = llm.invoke(prompt)
-    return {"response": res.content}
+    if reason:
+        output_text += f"\n💡 **Góc nhìn chuyên gia:**\n{reason}"
+
+    return {"messages": [AIMessage(content=output_text)]}
+    

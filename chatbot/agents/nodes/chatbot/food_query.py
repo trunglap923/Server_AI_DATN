@@ -26,7 +26,7 @@ def food_query(state: AgentState):
         query_constructor=query_constructor,
         vectorstore=docsearch,
         structured_query_translator=ElasticsearchTranslator(),
-        search_kwargs={"k": 3},
+        search_kwargs={"k": 2},
     )
     logger.info(f"🔍 Dạng truy vấn: {food_retriever.structured_query_translator.visit_structured_query(structured_query=query_ans)}")
 

@@ -16,129 +16,109 @@ class SelectedDish(BaseModel):
     role: Literal["main", "carb", "side"] = Field(
         description="Vai trò: 'main' (Món mặn/Đạm), 'carb' (Cơm/Tinh bột), 'side' (Rau/Canh)"
     )
-    reason: str = Field(description="Lý do chọn (ngắn gọn)")
 
 class DailyMenuStructure(BaseModel):
     dishes: List[SelectedDish] = Field(description="Danh sách các món ăn được chọn")
+    reason: str = Field(description="Lý do tổng quan cho thực đơn này và đánh giá thực đơn đã chọn")
 
-# --- NODE LOGIC ---
 def select_menu_structure(state: AgentState):
     logger.info("---NODE: AI SELECTOR (FULL MACRO AWARE)---")
-    profile = state["user_profile"]
-    candidates = state.get("candidate_pool", [])
-    meals_req = state["meals_to_generate"]
+    profile = state.get("user_profile", {})
+    full_pool = state.get("candidate_pool", [])
+    meals_req = state.get("meals_to_generate", [])
     
-    if len(candidates) == 0:
+    if len(full_pool) == 0:
         logger.warning("⚠️ Danh sách ứng viên rỗng, không thể chọn món.")
         return {"selected_structure": []}
 
-    # 1. TÍNH TOÁN MỤC TIÊU CHI TIẾT TỪNG BỮA (Budgeting)
+    # 1. TÍNH TOÁN MỤC TIÊU CHI TIẾT TỪNG BỮA
     daily_targets = {
-        "kcal": float(profile.get('targetcalories', 2000)),
-        "protein": float(profile.get('protein', 150)),
-        "lipid": float(profile.get('totalfat', 60)),
-        "carbohydrate": float(profile.get('carbohydrate', 200))
+        "kcal": float(profile.get('targetcalories', 0)),
+        "protein": float(profile.get('protein', 0)),
+        "totalfat": float(profile.get('totalfat', 0)),
+        "carbs": float(profile.get('carbohydrate', 0))
     }
     ratios = {"sáng": 0.25, "trưa": 0.40, "tối": 0.35}
 
-    # Tính target chi tiết cho từng bữa
-    # Kết quả dạng: {'sáng': {'kcal': 500, 'protein': 37.5, ...}, 'trưa': ...}
     meal_targets = {}
     for meal, ratio in ratios.items():
         meal_targets[meal] = {
             k: int(v * ratio) for k, v in daily_targets.items()
         }
 
-    # --- LOGIC TẠO HƯỚNG DẪN ĐỘNG ---
+    # --- LOGIC TẠO HƯỚNG DẪN ĐỘNG CHO PROMPT ---
+    avoid_items = ", ".join(profile.get('Kiêng', []))
+    limit_items = ", ".join(profile.get('Hạn chế', []))
     health_condition = profile.get('healthStatus', 'Bình thường')
-    safety_instruction = f"""
-    - Tình trạng sức khỏe: {health_condition}.
-    - Ưu tiên: Các món thanh đạm, chế biến đơn giản (Hấp/Luộc) nếu người dùng có nhiều bệnh nền.
-    """
 
+    safety_instruction = ""
+    if health_condition and health_condition.strip() not in  ["Bình thường", "Không có", "Khỏe mạnh"]:
+        safety_instruction += f"- Tình trạng sức khỏe: {health_condition}.\n"
+    if avoid_items:
+        safety_instruction += f"- TUYỆT ĐỐI TRÁNH: {avoid_items}. (Nếu thấy món chứa thành phần này trong danh sách, hãy BỎ QUA ngay lập tức).\n"
+    if limit_items:
+        safety_instruction += f"- HẠN CHẾ TỐI ĐA: {limit_items}.\n"
+    if safety_instruction:
+        safety_instruction = f"\nNGUYÊN TẮC AN TOÀN:\n{safety_instruction}\n"
+        
     # 2. TIỀN XỬ LÝ & PHÂN NHÓM CANDIDATES
-    candidates_by_meal = {"sáng": [], "trưa": [], "tối": []}
+    primary_pool = [m for m in full_pool if not m.get("is_fallback", False)]
+    backup_pool = [m for m in full_pool if m.get("is_fallback", False)]
 
-    for m in candidates:
-        if m.get('kcal', 0) > 1500: continue
-        if m.get('kcal', 0) < 100: continue
+    primary_text = format_pool_detailed(primary_pool, "KHO MÓN ĂN NGON (Ưu tiên dùng)")
+    backup_text = format_pool_detailed(backup_pool, "KHO LƯƠNG THỰC CƠ BẢN")
 
-        tag = m.get('meal_type_tag', '').lower()
-        if "sáng" in tag: candidates_by_meal["sáng"].append(m)
-        elif "trưa" in tag: candidates_by_meal["trưa"].append(m)
-        elif "tối" in tag: candidates_by_meal["tối"].append(m)
-
-    def format_list(items):
-        if not items: return ""
-        return "\n".join([
-            f"- {m['name']}: {m.get('kcal')} kcal | P:{m.get('protein')}g | L:{m.get('lipid')}g | C:{m.get('carbohydrate')}g"
-            for m in items
-        ])
-
+    # 3. XÂY DỰNG PROMPT
     def get_target_str(meal):
         t = meal_targets.get(meal, {})
-        return f"{t.get('kcal')} Kcal (P: {t.get('protein')}g, L: {t.get('lipid')}g, C: {t.get('carbohydrate')}g)"
+        return f"{t.get('kcal')} Kcal (P: {t.get('protein')}g, Fat: {t.get('totalfat')}g, Carb: {t.get('carbs')}g)"
 
-    # 3. XÂY DỰNG PROMPT (Kèm full chỉ số P/L/C)
-    guidance_sang = ""
-    if 'sáng' in meals_req:
-        guidance_sang = f"""BỮA SÁNG (Mục tiêu ~{get_target_str('sáng')}):
-        - Chọn 1 món chính có năng lượng ĐỦ LỚN (gần {get_target_str('sáng')}).
-        - Có thể bổ sung 1 món phụ sao cho dinh dưỡng cân bằng.
-        - Ưu tiên món nước (Phở/Bún) hoặc Bánh mì/Xôi, không nên ăn lẩu vào bữa sáng."""
-
-    guidance_trua = ""
-    if 'trưa' in meals_req:
-        guidance_trua = f"""BỮA TRƯA (Mục tiêu ~{get_target_str('trưa')}):
-        - Chọn tổ hợp gồm 3 món:
-        1. Main: Món cung cấp Protein chính.
-        2. Carb: Nguồn tinh bột thanh đạm như cơm trắng, cơm lứt, khoai, bún/phở (ít gia vị/dầu mỡ nếu Main đã đậm đà).
-        3. Side: Rau/Canh để bổ sung Xơ.
-        - Hoặc chọn 1 món Hỗn hợp (VD: Cơm chiên/Mì xào) nhưng không chọn thêm món mặn.
-        - Lưu ý: Món 'Main' và 'Side' phải tách biệt. Đừng chọn món rau xào thịt làm món Side (đó là Main)."""
-
-    guidance_toi = ""
-    if 'tối' in meals_req:
-        guidance_toi = f"""BỮA TỐI (Mục tiêu ~{get_target_str('tối')}):
-        - Tương tự như bữa trưa.
-        - Ưu tiên các món nhẹ bụng, dễ tiêu hóa.
-        - Giảm lượng tinh bột so với bữa trưa."""
-
-    # 2. Ghép vào prompt chính
     system_prompt = f"""
-    Bạn là Chuyên gia Dinh dưỡng AI.
-    Nhiệm vụ: Chọn thực đơn cho các bữa: {', '.join(meals_req)} từ danh sách ứng viên đã được lọc sơ bộ. Mỗi bữa bao gồm từ 1 đến 3 món.
+Vai trò: Đầu bếp trưởng kiêm Chuyên gia dinh dưỡng.
+Nhiệm vụ: Ghép thực đơn cho: {', '.join(meals_req)}.
 
-    TỔNG MỤC TIÊU NGÀY: {int(daily_targets['kcal'])} Kcal | Protein: {int(daily_targets['protein'])}g | Lipid: {int(daily_targets['lipid'])}g | Carbohydrate: {int(daily_targets['carbohydrate'])}g.
+MỤC TIÊU CỤ THỂ TỪNG BỮA (Hãy nhẩm tính để chọn món sát với mục tiêu nhất):
+{f"- SÁNG: ~{get_target_str('sáng')}" if 'sáng' in meals_req else ""}
+{f"- TRƯA: ~{get_target_str('trưa')}" if 'trưa' in meals_req else ""}
+{f"- TỐI : ~{get_target_str('tối')}" if 'tối' in meals_req else ""}
+{safety_instruction}
 
-    NGUYÊN TẮC CỐT LÕI:
-    1. Nhìn vào số liệu: Hãy chọn món sao cho tổng dinh dưỡng xấp xỉ với Mục Tiêu Chi Tiết của từng bữa.
-    2. Cảm quan đầu bếp: Món ăn phải hợp vị (VD: Canh chua đi với Cá kho).
-    3. Ước lượng: Không cần tính chính xác tuyệt đối, nhưng đừng chọn món 5g Protein cho mục tiêu 60g Protein.
+DỮ LIỆU ĐẦU VÀO (Tên món - Role - Dinh dưỡng):
+{primary_text}
+{backup_text}
 
-    NGUYÊN TẮC AN TOÀN:
-    Mặc dù danh sách món đã được lọc, bạn vẫn là chốt chặn cuối cùng. Hãy tuân thủ:
-    {safety_instruction}
+NGUYÊN TẮC CHỌN MÓN (QUAN TRỌNG):
+1. Cấu trúc & Dinh dưỡng (Linh hoạt):
+  - SÁNG: 1 Món chính (Ưu tiên món nước/bánh mì).
+  - TRƯA & TỐI: Không bắt buộc phải đủ 3 món. Hãy chọn theo 1 trong 2 cách sau:
+    + Cách A (Món hỗn hợp): Chọn 1-2 món nếu món đó là món hỗn hợp (VD: Bún, Mì, Nui, Cơm rang, Salad thịt...) và đã cung cấp đủ Kcal/Protein/Carb gần với Target.
+    + Cách B (Cơm gia đình): Nếu chọn món mặn rời (ít Carb/Rau), hãy ghép thêm [Tinh Bột] + [Rau/Canh] để cân bằng.
+    => MỤC TIÊU: Tổng Kcal của bữa ăn phải sát với Target (sai số cho phép ~10-15%).
 
-    HƯỚNG DẪN TỪNG BỮA
-    {guidance_sang}
-    {guidance_trua}
-    {guidance_toi}
+2. Quy tắc Ưu tiên & Dự phòng:
+  - Luôn quét trong "KHO MÓN ĂN NGON" trước.
+  - Nếu chọn Cách B: Hãy tìm món canh/rau trong kho ngon trước. Chỉ khi kho ngon không có hoặc làm vỡ Target Kcal (quá cao), mới lấy Cơm/Rau từ "KHO LƯƠNG THỰC CƠ BẢN".
 
-    DANH SÁCH ỨNG VIÊN
-    {format_list(candidates_by_meal['sáng'])}
-    {format_list(candidates_by_meal['trưa'])}
-    {format_list(candidates_by_meal['tối'])}
-    """
+3. Chiến thuật ghép món:
+  - Nếu Target bữa thấp (<500k): Ưu tiên 1 món hỗn hợp nhẹ hoặc bộ 3 món (Cá/Hấp + Cơm ít + Canh rau).
+  - Nếu Target bữa cao (>700k): Ưu tiên bộ 3 món đầy đủ hoặc món hỗn hợp đậm đà.
+"""
 
     logger.info("Prompt:")
     logger.info(system_prompt)
 
-    # Gọi LLM
-    llm_structured = llm.with_structured_output(DailyMenuStructure, strict=True)
-    result = llm_structured.invoke(system_prompt)
+    try:
+        logger.info("Đang gọi LLM lựa chọn món...")
+        llm_structured = llm.with_structured_output(DailyMenuStructure, strict=True)
+        result = llm_structured.invoke(system_prompt)
+        
+        if not result or not hasattr(result, 'dishes'):
+            raise ValueError("LLM trả về kết quả rỗng hoặc sai định dạng object.")
 
-    # In danh sách các món đã chọn lần lượt theo bữa
+    except Exception as e:
+        logger.error(f"🔥 LỖI GỌI LLM SELECTOR: {e}")
+        return {"selected_structure": [], "reason": "Lỗi hệ thống khi chọn món."}
+    
     def print_menu_by_meal(daily_menu):
         menu_by_meal = defaultdict(list)
         for dish in daily_menu.dishes:
@@ -148,16 +128,14 @@ def select_menu_structure(state: AgentState):
             if meal in menu_by_meal:
                 logger.info(f"\n🍽 Bữa {meal.upper()}:")
                 for d in menu_by_meal[meal]:
-                    logger.info(f" - {d.name} ({d.role}): {d.reason}")
+                    logger.info(f" - {d.name} ({d.role})")
 
     logger.info("\n--- MENU ĐÃ CHỌN ---")
     print_menu_by_meal(result)
 
     # 4. HẬU XỬ LÝ (Gán Bounds)
     selected_full_info = []
-    all_clean_candidates = []
-    for sublist in candidates_by_meal.values():
-        all_clean_candidates.extend(sublist)
+    all_clean_candidates = primary_pool + backup_pool
     candidate_map = {m['name']: m for m in all_clean_candidates}
 
     for choice in result.dishes:
@@ -165,33 +143,27 @@ def select_menu_structure(state: AgentState):
             dish_data = candidate_map[choice.name].copy()
             dish_data["assigned_meal"] = choice.meal_type
 
-            # Lấy thông tin dinh dưỡng món hiện tại
             d_kcal = float(dish_data.get("kcal", 0))
             d_pro = float(dish_data.get("protein", 0))
 
-            # Lấy target bữa hiện tại (VD: Trưa)
             t_target = meal_targets.get(choice.meal_type.lower(), {})
             t_kcal = t_target.get("kcal", 500)
             t_pro = t_target.get("protein", 30)
 
-            # --- GIAI ĐOẠN 1: TỰ ĐỘNG SỬA SAI VAI TRÒ (ROLE CORRECTION) ---
-            final_role = choice.role # Bắt đầu bằng role AI chọn
-
+            # --- GIAI ĐOẠN 1: TỰ ĐỘNG SỬA SAI VAI TRÒ ---
+            final_role = choice.role
             # 1. Phát hiện "Carb trá hình" (Cơm chiên/Mì xào quá nhiều thịt)
             if final_role == "carb" and d_pro > 15:
-                print(f"   ⚠️ Phát hiện Carb giàu đạm ({choice.name}: {d_pro}g Pro). Đổi role sang 'main'.")
+                logger.info(f"   ⚠️ Phát hiện Carb giàu đạm ({choice.name}: {d_pro}g Pro). Đổi role sang 'main'.")
                 final_role = "main"
-
             # 2. Phát hiện "Side giàu đạm" (Salad gà/bò, Canh sườn)
             elif final_role == "side" and d_pro > 10:
-                print(f"   ⚠️ Phát hiện Side giàu đạm ({choice.name}: {d_pro}g Pro). Đổi role sang 'main'.")
+                logger.info(f"   ⚠️ Phát hiện Side giàu đạm ({choice.name}: {d_pro}g Pro). Đổi role sang 'main'.")
                 final_role = "main"
-
-            # Cập nhật lại role chuẩn vào dữ liệu
+                
             dish_data["role"] = final_role
 
-
-            # --- GIAI ĐOẠN 2: THIẾT LẬP BOUNDS CƠ BẢN (BASE BOUNDS) ---
+            # --- GIAI ĐOẠN 2: THIẾT LẬP BOUNDS CƠ BẢN ---
             lower_bound = 0.5
             upper_bound = 1.5
 
@@ -208,25 +180,23 @@ def select_menu_structure(state: AgentState):
                 lower_bound, upper_bound = 0.6, 1.8
 
 
-            # --- GIAI ĐOẠN 3: KIỂM TRA AN TOÀN & GHI ĐÈ  ---
-
-            # Override A: Nếu món Main có Protein quá khủng so với Target
-            # (VD: Món 52g Pro vs Target Bữa 30g Pro) -> Phải cho phép giảm sâu
+            # --- GIAI ĐOẠN 3: KIỂM TRA AN TOÀN & GHI ĐÈ ---
+            # Override A: Nếu món Main có Protein quá lớn so với Target
             if final_role == "main" and d_pro > t_pro:
-                print(f"   ⚠️ Món {choice.name} thừa đạm ({d_pro}g > {t_pro}g). Mở rộng bound xuống thấp.")
-                lower_bound = 0.3  # Cho phép giảm xuống 30% suất
-                upper_bound = min(upper_bound, 1.2) # Không cho phép tăng quá nhiều
+                logger.info(f"   ⚠️ Món {choice.name} thừa đạm ({d_pro}g > {t_pro}g). Mở rộng bound xuống thấp.")
+                lower_bound = 0.3
+                upper_bound = min(upper_bound, 1.2)
 
             # Override B: Nếu món quá nhiều Calo (Chiếm > 80% Kcal cả bữa)
             if d_kcal > (t_kcal * 0.8):
-                print(f"   ⚠️ Món {choice.name} quá đậm năng lượng ({d_kcal} kcal). Siết chặt bound.")
+                logger.info(f"   ⚠️ Món {choice.name} quá đậm năng lượng ({d_kcal} kcal). Siết chặt bound.")
                 lower_bound = 0.3
-                upper_bound = min(upper_bound, 1.0) # Chặn không cho tăng
+                upper_bound = min(upper_bound, 1.0)
 
             # Override C: Nếu là món Side nhưng Protein vẫn hơi cao (5-10g)
-            # Cho phép giảm để nhường quota Protein cho món Main
             if final_role == "side" and d_pro > 5:
-                lower_bound = 0.2 # Cho phép ăn ít rau này lại
+                logger.info(f"   ⚠️ Món {choice.name} Side có đạm hơi cao ({d_pro}g). Hạ thấp bound.")
+                lower_bound = 0.2
 
             # --- KẾT THÚC: GÁN VÀO DỮ LIỆU ---
             dish_data["solver_bounds"] = (lower_bound, upper_bound)
@@ -234,4 +204,28 @@ def select_menu_structure(state: AgentState):
 
     return {
         "selected_structure": selected_full_info,
+        "reason": result.reason
     }
+    
+def format_pool_detailed(pool, title):
+        if not pool: return ""
+        text = f"--- {title} ---\n"
+
+        for m in pool:
+            name = m['name']
+            name_lower = name.lower()
+
+            role_hint = ""
+            if any(w in name_lower for w in ["rau", "cải", "canh", "salad", "nộm", "gỏi", "bầu", "bí", "su su"]):
+                role_hint = "[Role: Rau/Canh]"
+            elif any(w in name_lower for w in ["cơm", "bún", "phở", "mì", "miến", "xôi", "cháo", "bánh mì"]):
+                role_hint = "[Role: Tinh Bột]"
+            else:
+                role_hint = "[Role: Món Mặn]"
+
+            stats = f"({int(m.get('kcal',0))}k, P:{int(m.get('protein',0))}, F:{int(m.get('totalfat',0))}, C:{int(m.get('carbs',0))})"
+
+            # Kết hợp: "Món A [Role] (500k, P30...)"
+            text += f"- {name} {role_hint} {stats}\n"
+
+        return text

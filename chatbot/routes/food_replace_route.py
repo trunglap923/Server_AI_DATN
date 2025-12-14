@@ -1,8 +1,11 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from langchain_core.messages import HumanMessage
-from chatbot.agents.states.state import AgentState
 from chatbot.agents.graphs.food_similarity_graph import food_similarity_graph
+import logging
+
+# --- Cấu hình logging ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- Định nghĩa request body ---
 class Request(BaseModel):
@@ -15,27 +18,38 @@ router = APIRouter(
     tags=["Food Replace"]
 )
 
+try:
+    replace_app = food_similarity_graph()
+except Exception as e:
+    logger.error(f"❌ Failed to compile Food Graph: {e}")
+    raise e
+
 @router.post("/")
-def chat(request: Request):
+def replace_food(request: Request):
     try:
+        logger.info(f"Nhận được yêu cầu thay thế món từ user: {request.user_id}")
         
-        print("Nhận được yêu cầu chat từ user:", request.user_id)
+        food_data = request.food_old.copy()
+        bounds = food_data.get("solver_bounds")
         
-        # 1. Tạo state mới
-        state = AgentState()
-        state["user_id"] = request.user_id
-        state["food_old"] = request.food_old
-        state["food_old"]["solver_bounds"] = tuple(state["food_old"].get("solver_bounds"))
+        if bounds and isinstance(bounds, list):
+            food_data["solver_bounds"] = tuple(bounds)
+        elif not bounds:
+            food_data["solver_bounds"] = (0.5, 2.0)
 
-        # 2. Lấy workflow
-        graph = food_similarity_graph()
+        initial_state = {
+            "user_id": request.user_id,
+            "food_old": food_data,
+        }
 
-        # 3. Invoke workflow
-        result = graph.invoke(state)
+        final_state = replace_app.invoke(initial_state)
+        response = {"best_replacement": final_state["best_replacement"]}
+        
+        if not response:
+            return {"status": "failed", "response": []}
 
-        # 4. Trả response
-        response = result or "Không có kết quả"
-        return {"response": response}
+        return {"status": "success", "response": response}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Lỗi chatbot: {e}")
+        logger.error(f"Lỗi xử lý thay thế món: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Lỗi hệ thống: {str(e)}")

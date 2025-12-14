@@ -9,15 +9,18 @@ logger = logging.getLogger(__name__)
 
 def find_replacement_candidates(state: SwapState):
     logger.info("---NODE: FIND REPLACEMENTS (SELF QUERY)---")
-    food_old = state["food_old"]
-    profile = state["user_profile"]
+    food_old = state.get("food_old")
+    profile = state.get("user_profile", {})
+    
+    if not food_old:
+        logger.warning("⚠️ Không tìm thấy thông tin món cũ (food_old).")
+        return {"candidates": []}
 
     diet_mode = profile.get('diet', '')       # VD: Chế độ HighProtein
     restrictions = profile.get('limitFood', '') # VD: Dị ứng sữa, Thuần chay
     health_status = profile.get('healthStatus', '') # VD: Suy thận
 
     constraint_prompt = ""
-
     if restrictions:
         constraint_prompt += f"Yêu cầu bắt buộc: {restrictions}. "
     if health_status:
@@ -32,7 +35,6 @@ def find_replacement_candidates(state: SwapState):
     numerical_query = generate_numerical_constraints(profile, meal_type)
 
     # 2. Xây dựng Query tự nhiên để SelfQueryRetriever hiểu
-    # Mẹo: Đưa thông tin phủ định "Không phải món X" vào
     query = (
         f"Tìm các món ăn đóng vai trò '{role}' phù hợp cho bữa '{meal_type}'. "
         f"Khác với món '{old_name}'. "
@@ -41,7 +43,6 @@ def find_replacement_candidates(state: SwapState):
 
     if numerical_query:
         query += f"Yêu cầu: {numerical_query}"
-
     logger.info(f"🔎 Query: {query}")
 
     # 3. Gọi Retriever
@@ -55,11 +56,8 @@ def find_replacement_candidates(state: SwapState):
     candidates = []
     for doc in docs:
         item = doc.metadata.copy()
-
-        # Bỏ qua chính món cũ (Double check)
         if item.get("name") == old_name: continue
-
-        # Gán context của món cũ sang để tính toán
+        
         item["target_role"] = role
         item["target_meal"] = meal_type
         candidates.append(item)

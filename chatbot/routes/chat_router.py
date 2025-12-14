@@ -1,12 +1,17 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from langchain_core.messages import HumanMessage
-from chatbot.agents.states.state import AgentState
 from chatbot.agents.graphs.chatbot_graph import workflow_chatbot
+import logging
+
+# --- Cấu hình logging ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- Định nghĩa request body ---
 class ChatRequest(BaseModel):
     user_id: str
+    thread_id: str
     message: str
 
 # --- Tạo router ---
@@ -15,27 +20,34 @@ router = APIRouter(
     tags=["Chatbot"]
 )
 
+try:
+    chatbot_app = workflow_chatbot()
+except Exception as e:
+    logger.error(f"❌ Failed to compile Chatbot Graph: {e}")
+    raise e
+
 # --- Route xử lý chat ---
 @router.post("/")
 def chat(request: ChatRequest):
     try:
-        
-        print("Nhận được yêu cầu chat từ user:", request.user_id)
-        
-        # 1. Tạo state mới
-        state = AgentState()
-        state["user_id"] = request.user_id
-        state["messages"] = [HumanMessage(content=request.message)]
+        logger.info(f"Nhận được tin nhắn chat từ user: {request.user_id}")
+        config = {"configurable": {"thread_id": request.thread_id}}
 
-        # 2. Lấy workflow chatbot
-        graph = workflow_chatbot()
+        initial_state = {
+            "user_id": request.user_id,
+            "messages": [HumanMessage(content=request.message)]
+        }
 
-        # 3. Invoke workflow
-        result = graph.invoke(state)
+        final_state = chatbot_app.invoke(initial_state, config=config)
 
-        # 4. Trả response
-        response = result["response"] or "Không có kết quả"
-        return {"response": response}
+        messages = final_state.get("messages", [])
+        if messages and len(messages) > 0:
+            response_content = messages[-1].content
+        else:
+            response_content = "Không có kết quả trả về."
+
+        return {"response": response_content}
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Lỗi chatbot: {e}")
+        logger.error(f"Lỗi chatbot: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Lỗi chatbot: {str(e)}")

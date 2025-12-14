@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from chatbot.routes.chat_router import router as chat_router
 from chatbot.routes.meal_plan_route import router as meal_plan_router
 from chatbot.routes.food_replace_route import router as food_replace_router
+from chatbot.routes.manage_food_route import router as manage_food_router
 
 app = FastAPI(
     title="AI Meal Chatbot API",
@@ -23,6 +24,7 @@ app.add_middleware(
 app.include_router(chat_router)
 app.include_router(meal_plan_router)
 app.include_router(food_replace_router)
+app.include_router(manage_food_router)
 
 @app.get("/")
 def root():

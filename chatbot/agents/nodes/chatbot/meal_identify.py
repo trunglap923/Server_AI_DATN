@@ -1,4 +1,4 @@
-from langchain.prompts import PromptTemplate
+from langchain.prompts import ChatPromptTemplate
 import json
 from pydantic import BaseModel, Field
 from chatbot.agents.states.state import AgentState
@@ -17,39 +17,40 @@ class MealIntent(BaseModel):
     
 def meal_identify(state: AgentState):
     logger.info("---MEAL IDENTIFY---")
-
-    llm_with_structure_op = llm.with_structured_output(MealIntent)
-
-    # Lấy câu hỏi mới nhất từ lịch sử hội thoại
     messages = state["messages"]
     user_message = messages[-1].content if messages else state.question
+    
+    structured_llm = llm.with_structured_output(MealIntent)
 
-    format_instructions = json.dumps(llm_with_structure_op.output_schema.model_json_schema(), ensure_ascii=False, indent=2)
+    system = """
+    Bạn là chuyên gia phân tích yêu cầu dinh dưỡng.
+    Nhiệm vụ: Đọc câu hỏi người dùng và trích xuất danh sách các bữa ăn họ muốn gợi ý.
+    Chỉ được chọn trong các giá trị: "sáng", "trưa", "tối".
+    Nếu người dùng nói "cả ngày", hãy trả về ["sáng", "trưa", "tối"].
+    """
 
-    prompt = PromptTemplate(
-        template="""
-        Bạn là bộ phân tích yêu cầu gợi ý bữa ăn trong hệ thống chatbot dinh dưỡng.
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system),
+        ("human", "{question}"),
+    ])
+    
+    chain = prompt | structured_llm
 
-        Dựa trên câu hỏi của người dùng, hãy xác định danh sách các bữa người dùng muốn gợi ý.
+    try:
+        result = chain.invoke({"question": user_message})
 
-        - Các bữa người dùng có thể muốn gợi ý gồm: ["sáng", "trưa", "tối"].
+        if not result:
+            logger.info("⚠️ Model không trả về định dạng đúng, dùng mặc định.")
+            meals = ["sáng", "trưa", "tối"]
+        else:
+            meals = result.meals_to_generate
 
-        Câu hỏi người dùng: {question}
+    except Exception as e:
+        logger.info(f"⚠️ Lỗi Parse JSON: {e}")
+        meals = ["sáng", "trưa", "tối"]
 
-        Hãy xuất kết quả dưới dạng JSON theo schema sau:
-        {format_instructions}
-        """
-    )
-
-    chain = prompt | llm_with_structure_op
-
-    result = chain.invoke({
-        "question": user_message,
-        "format_instructions": format_instructions
-    })
-
-    logger.info("Bữa cần gợi ý: " + ", ".join(result.meals_to_generate))
+    logger.info("Bữa cần gợi ý: " + ", ".join(meals))
 
     return {
-        "meals_to_generate": result.meals_to_generate,
+        "meals_to_generate": meals
     }

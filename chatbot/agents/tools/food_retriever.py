@@ -6,157 +6,145 @@ from langchain.chains.query_constructor.base import (
 from langchain_deepseek import ChatDeepSeek
 from langchain_elasticsearch import ElasticsearchStore
 from langchain.retrievers.self_query.elasticsearch import ElasticsearchTranslator
+from langchain.chains.query_constructor.base import load_query_constructor_runnable
 from langchain.retrievers.self_query.base import SelfQueryRetriever
 
 from chatbot.models.embeddings import embeddings
 from chatbot.models.llm_setup import llm
-from chatbot.config import ELASTIC_CLOUD_URL, ELASTIC_API_KEY
+from chatbot.config import ELASTIC_CLOUD_URL, ELASTIC_API_KEY, FOOD_DB_INDEX
 
 
 # ========================================
 # 1️⃣ Định nghĩa metadata field info
 # ========================================
 metadata_field_info = [
-
-    # Thông tin chung về món ăn
+    # --- THÔNG TIN ĐỊNH DANH & PHÂN LOẠI ---
     AttributeInfo(
         name="meal_id",
-        description="ID duy nhất của món ăn",
+        description="ID duy nhất của món ăn (số nguyên)",
         type="integer"
     ),
     AttributeInfo(
         name="name",
-        description="Tên món ăn",
+        description="Tên của món ăn",
         type="string"
     ),
     AttributeInfo(
-        name="servings",
-        description="Số khẩu phần ăn",
-        type="integer"
-    ),
-    AttributeInfo(
-        name="difficulty",
-        description="Độ khó chế biến",
-        type="string"
-    ),
-    AttributeInfo(
-        name="cooking_time_minutes",
-        description="Thời gian nấu (phút)",
-        type="integer"
+        name="tags",
+        description=(
+            "Danh sách các thẻ phân loại đặc điểm món ăn. Bao gồm các nhóm chính: "
+            "1. Nhóm thực phẩm: #HảiSản, #Thịt, #RauXanh, #Lẩu, #ĐồĂnNhanh... "
+            "2. Dinh dưỡng (Macros): #HighProtein (Giàu đạm), #LowCarbs (Ít tinh bột), #LowCalories (Ít calo)... "
+            "3. Chất béo: #LowSaturatedFat (Ít béo bão hòa), #LowCholesterol... "
+            "4. Vitamin & Khoáng chất: #HighVitaminC, #HighFe (Giàu Sắt), #HighCanxi... "
+            "Lưu ý: Các tag thường bắt đầu bằng dấu # và viết liền (PascalCase)."
+        ),
+        type="list[string]"
     ),
 
-     # Nguyên liệu
+    # --- NGUYÊN LIỆU ---
     AttributeInfo(
         name="ingredients",
-        description="Danh sách nguyên liệu (list string), ví dụ: ['cà rốt', 'rong biển', 'trứng gà']",
-        type="string"
+        description="Danh sách các nguyên liệu có trong món ăn (dạng list)",
+        type="list[string]"
     ),
     AttributeInfo(
         name="ingredients_text",
-        description="Nguyên liệu ở dạng chuỗi nối, ví dụ: 'cà rốt, rong biển, trứng gà'",
+        description="Chuỗi văn bản liệt kê toàn bộ nguyên liệu (dùng để tìm kiếm text)",
         type="string"
     ),
 
-    # Năng lượng & chất đa lượng
+    # --- NĂNG LƯỢNG & MACROS (CHẤT ĐA LƯỢNG) ---
     AttributeInfo(
         name="kcal",
-        description="Năng lượng của món ăn (kcal)",
+        description="Tổng năng lượng (kcal)",
         type="float"
     ),
     AttributeInfo(
         name="protein",
-        description="Hàm lượng protein (g)",
+        description="Hàm lượng Đạm/Protein (g)",
         type="float"
     ),
     AttributeInfo(
-        name="carbohydrate",
-        description="Hàm lượng carbohydrate (g)",
+        name="carbs",
+        description="Hàm lượng Bột đường/Carbohydrate (g)",
         type="float"
     ),
     AttributeInfo(
         name="sugar",
-        description="Hàm lượng đường tổng (g)",
+        description="Hàm lượng Đường (g)",
         type="float"
     ),
     AttributeInfo(
         name="fiber",
-        description="Hàm lượng chất xơ (g)",
+        description="Hàm lượng Chất xơ (g)",
+        type="float"
+    ),
+    # --- CẬP NHẬT MỚI: TOTAL FAT ---
+    AttributeInfo(
+        name="totalfat",
+        description="Tổng lượng Chất béo (g)",
         type="float"
     ),
     AttributeInfo(
-        name="lipid",
-        description="Tổng chất béo (g)",
-        type="float"
-    ),
-    AttributeInfo(
-        name="saturated_fat",
+        name="saturatedfat",
         description="Chất béo bão hòa (g)",
         type="float"
     ),
     AttributeInfo(
-        name="monounsaturated_fat",
+        name="monounsaturatedfat",
         description="Chất béo không bão hòa đơn (g)",
         type="float"
     ),
     AttributeInfo(
-        name="polyunsaturated_fat",
+        name="polyunsaturatedfat",
         description="Chất béo không bão hòa đa (g)",
         type="float"
     ),
     AttributeInfo(
-        name="trans_fat",
+        name="transfat",
         description="Chất béo chuyển hóa (g)",
         type="float"
     ),
     AttributeInfo(
         name="cholesterol",
-        description="Hàm lượng cholesterol (mg)",
+        description="Hàm lượng Cholesterol (mg)",
         type="float"
     ),
 
-    # Vitamin
+    # --- VITAMINS ---
     AttributeInfo(
-        name="vit_a",
+        name="vitamina",
         description="Vitamin A (mg)",
         type="float"
     ),
     AttributeInfo(
-        name="vit_d",
+        name="vitamind",
         description="Vitamin D (mg)",
         type="float"
     ),
     AttributeInfo(
-        name="vit_c",
+        name="vitaminc",
         description="Vitamin C (mg)",
         type="float"
     ),
     AttributeInfo(
-        name="vit_b6",
+        name="vitaminb6",
         description="Vitamin B6 (mg)",
         type="float"
     ),
     AttributeInfo(
-        name="vit_b12",
+        name="vitaminb12",
         description="Vitamin B12 (mg)",
         type="float"
     ),
     AttributeInfo(
-        name="vit_b12_added",
-        description="Vitamin B12 bổ sung (mg)",
-        type="float"
-    ),
-    AttributeInfo(
-        name="vit_e",
+        name="vitamine",
         description="Vitamin E (mg)",
         type="float"
     ),
     AttributeInfo(
-        name="vit_e_added",
-        description="Vitamin E bổ sung (mg)",
-        type="float"
-    ),
-    AttributeInfo(
-        name="vit_k",
+        name="vitamink",
         description="Vitamin K (mg)",
         type="float"
     ),
@@ -166,15 +154,15 @@ metadata_field_info = [
         type="float"
     ),
 
-    # Khoáng chất
+    # --- KHOÁNG CHẤT ---
     AttributeInfo(
         name="canxi",
         description="Canxi (mg)",
         type="float"
     ),
     AttributeInfo(
-        name="sat",
-        description="Sắt (mg)",
+        name="fe",
+        description="Sắt/Fe (mg)",
         type="float"
     ),
     AttributeInfo(
@@ -198,15 +186,15 @@ metadata_field_info = [
         type="float"
     ),
     AttributeInfo(
-        name="kem",
-        description="Kẽm (mg)",
+        name="zn",
+        description="Kẽm/Zn (mg)",
         type="float"
     ),
 
-    # Thành phần khác
+    # --- THÀNH PHẦN KHÁC ---
     AttributeInfo(
         name="water",
-        description="Hàm lượng nước (g)",
+        description="Hàm lượng Nước (g)",
         type="float"
     ),
     AttributeInfo(
@@ -216,86 +204,172 @@ metadata_field_info = [
     ),
     AttributeInfo(
         name="alcohol",
-        description="Cồn (g)",
+        description="Cồn/Alcohol (g)",
         type="float"
     ),
 ]
 
-document_content_description = "Mô tả ngắn gọn về món ăn"
-
+document_content_description = """
+Thông tin chi tiết về các món ăn.
+Quy tắc ánh xạ Tag (Tag Mapping Rules):
+- Nếu người dùng tìm "Giàu/Nhiều X", hãy dùng tag "#HighX" (ví dụ: Giàu đạm -> #HighProtein, Giàu Sắt -> #HighFe).
+- Nếu người dùng tìm "Ít/Thấp X", hãy dùng tag "#LowX" (ví dụ: Ít béo -> #LowSaturatedFat, Ít đường -> #LowSugar).
+- Các thực phẩm cụ thể thường có tag tương ứng (Hải sản -> #HảiSản, Rau -> #RauXanh).
+"""
 
 # ========================================
 # 2️⃣ Định nghĩa toán tử hỗ trợ và ví dụ
 # ========================================
 allowed_comparators = [
-    "$eq",
-    "$gt",
-    "$gte",
-    "$lt",
-    "$lte",
-    "$contain",
-    "$like",
+    "eq",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "contain",
+    "like"
 ]
 
 examples = [
+    # --- NHÓM 1: NGUYÊN LIỆU & SỐ LIỆU CỤ THỂ (Ưu tiên logic số học) ---
     (
         "Gợi ý các món ăn có trứng và ít hơn 500 kcal.",
         {
-            "query": "món ăn có trứng",
-            "filter": 'and(lt("kcal", 500), contain("ingredients", "trứng"))',
+            "query": "món ăn từ trứng",
+            # Dùng contain cho ingredients, lt cho kcal
+            "filter": 'and(lt("kcal", 500), contain("ingredients", "Trứng"))',
         },
     ),
     (
         "Tìm món ăn không chứa trứng nhưng có nhiều protein hơn 30g.",
         {
-            "query": "món ăn không có trứng",
-            "filter": 'and(gt("protein", 30), not(contain("ingredients", "trứng")))',
+            "query": "món ăn giàu đạm",
+            # Dùng not(contain(...))
+            "filter": 'and(gt("protein", 30), not(contain("ingredients", "Trứng")))',
         },
     ),
     (
-        "Món ăn chay dễ nấu trong vòng 20 phút.",
+        "Món ăn có cà rốt, rong biển và trên 300 kcal.",
         {
-            "query": "món ăn chay",
-            "filter": 'and(lte("cooking_time_minutes", 20), eq("difficulty", "easy"), not(contain("ingredients", "thịt")), not(contain("ingredients", "cá")))',
+            "query": "món ăn nguyên liệu cụ thể",
+            # Contain riêng biệt cho từng nguyên liệu
+            "filter": 'and(gt("kcal", 300), contain("ingredients", "Cà Rốt"), contain("ingredients", "Rong Biển"))',
         },
     ),
+
+    # --- NHÓM 2: MACROS VỚI SỐ LIỆU (Chú ý tên trường: totalfat, carbs, vitaminc) ---
     (
         "Món ăn giàu chất xơ, trên 10g, ít đường dưới 5g.",
         {
-            "query": "món ăn giàu chất xơ",
+            "query": "món ăn healthy",
             "filter": 'and(gt("fiber", 10), lt("sugar", 5))',
         },
     ),
     (
         "Món ăn có vitamin C trên 50mg và ít chất béo dưới 10g.",
         {
-            "query": "món ăn nhiều vitamin C",
-            "filter": 'and(gt("vit_c", 50), lt("lipid", 10))',
+            "query": "món ăn giàu vitamin C",
+            # Sửa map: vit_c -> vitaminc, lipid -> totalfat
+            "filter": 'and(gt("vitaminc", 50), lt("totalfat", 10))',
         },
     ),
     (
-        "Gợi ý các món ăn keto với nhiều chất béo nhưng ít carb.",
+        "Gợi ý các món ăn keto với nhiều chất béo (trên 20g) nhưng ít carb (dưới 5g).",
         {
             "query": "món ăn keto",
-            "filter": 'and(gt("lipid", 20), lt("carbohydrate", 5))',
+            # Sửa map: carbohydrate -> carbs
+            "filter": 'and(gt("totalfat", 20), lt("carbs", 5))',
+        },
+    ),
+
+    # --- NHÓM 3: MAPPING TAG TRỪU TƯỢNG (Khi không có số liệu) ---
+    (
+        "Gợi ý các món giàu đạm (nhiều protein) và ít tinh bột.",
+        {
+            "query": "món ăn giàu đạm ít tinh bột",
+            # Không có số -> Dùng Tags #HighProtein, #LowCarbs
+            "filter": 'and(contain("tags", "#HighProtein"), contain("tags", "#LowCarbs"))',
         },
     ),
     (
-        "Món ăn có cà rốt, rong biển và trên 300 kcal.",
+        "Tìm món ăn ít calo để giảm cân.",
         {
-            "query": "món ăn có cà rốt và rong biển",
-            "filter": 'and(gt("kcal", 300), contain("ingredients", "cà rốt"), contain("ingredients", "rong biển"))',
+            "query": "món ăn giảm cân",
+            # Giảm cân -> #LowCalories
+            "filter": 'contain("tags", "#LowCalories")',
         },
     ),
     (
-        "Tìm món có khoảng 500 kcal và 20g protein",
+        "Tìm món thanh đạm, ít béo bão hòa.",
         {
-            "query": "món ăn có năng lượng trung bình",
-            "filter": 'and(gte("kcal", 450), lte("kcal", 450), gte("protein", 15), lte("protein", 25))',
+            "query": "món ăn thanh đạm",
+            # Ít béo bão hòa -> #LowSaturatedFat
+            "filter": 'contain("tags", "#LowSaturatedFat")',
+        },
+    ),
+
+    # --- NHÓM 4: MAPPING VITAMIN & KHOÁNG CHẤT (Fe, Zn, Canxi...) ---
+    (
+        "Món ăn bổ máu (giàu sắt).",
+        {
+            "query": "món ăn bổ máu",
+            # Sắt -> #HighFe
+            "filter": 'contain("tags", "#HighFe")',
+        },
+    ),
+    (
+        "Món ăn giàu canxi cho xương chắc khỏe.",
+        {
+            "query": "món ăn giàu canxi",
+            # Canxi -> #HighCanxi
+            "filter": 'contain("tags", "#HighCanxi")',
+        },
+    ),
+    (
+        "Món ăn tốt cho mắt (giàu vitamin A).",
+        {
+            "query": "món ăn tốt cho mắt",
+            # Vitamin A -> #HighVitaminA
+            "filter": 'contain("tags", "#HighVitaminA")',
+        },
+    ),
+
+    # --- NHÓM 5: SỨC KHỎE TIM MẠCH & BỆNH LÝ ---
+    (
+        "Tìm món tốt cho tim mạch, ít cholesterol.",
+        {
+            "query": "món ăn tốt cho tim mạch",
+            # Cholesterol -> #LowCholesterol
+            "filter": 'contain("tags", "#LowCholesterol")',
+        },
+    ),
+    (
+        "Tìm món ăn nhạt muối cho người huyết áp cao.",
+        {
+            "query": "món ăn nhạt muối",
+            # Nhạt muối/Ít Natri -> #LowNatri
+            "filter": 'contain("tags", "#LowNatri")',
+        },
+    ),
+
+    # --- NHÓM 6: LOẠI MÓN ĂN & NHÓM THỰC PHẨM ---
+    (
+        "Tìm món lẩu hải sản",
+        {
+            "query": "lẩu hải sản",
+            # Tags loại món
+            "filter": 'and(contain("tags", "#Lẩu"), contain("tags", "#HảiSản"))',
+        },
+    ),
+    (
+        "Món chay có nhiều rau xanh.",
+        {
+            "query": "món chay rau xanh",
+            # Rau xanh -> #RauXanh
+            "filter": 'contain("tags", "#RauXanh")',
         },
     )
 ]
-
 
 # ========================================
 # 3️⃣ Tạo Query Constructor
@@ -315,9 +389,13 @@ llm = ChatDeepSeek(
     max_retries=2,
 )
 
-output_parser = StructuredQueryOutputParser.from_components()
-query_constructor = prompt_query | llm | output_parser
-
+query_constructor = load_query_constructor_runnable(
+    llm=llm,
+    document_contents=document_content_description,
+    attribute_info=metadata_field_info,
+    examples=examples,
+    allowed_comparators=allowed_comparators
+)
 
 # ========================================
 # 4️⃣ Kết nối Elasticsearch
@@ -325,7 +403,7 @@ query_constructor = prompt_query | llm | output_parser
 docsearch = ElasticsearchStore(
     es_url=ELASTIC_CLOUD_URL,
     es_api_key=ELASTIC_API_KEY,
-    index_name="food_vdb",
+    index_name=FOOD_DB_INDEX,
     embedding=embeddings,
 )
 

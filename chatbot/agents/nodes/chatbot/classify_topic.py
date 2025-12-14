@@ -1,8 +1,9 @@
-from langchain.prompts import PromptTemplate
-import json
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from pydantic import BaseModel, Field
 from chatbot.agents.states.state import AgentState
 from chatbot.models.llm_setup import llm
+from chatbot.utils.chat_history import get_chat_history
+from chatbot.knowledge.field_requirement import TOPIC_REQUIREMENTS
 import logging
 
 # --- Cấu hình logging ---
@@ -18,54 +19,45 @@ class Topic(BaseModel):
     )
 
 def classify_topic(state: AgentState):
-    logger.info("---CLASSIFY TOPIC---")
-    llm_with_structure_op = llm.with_structured_output(Topic)
+    print("---CLASSIFY TOPIC ---")
 
-    prompt = PromptTemplate(
-        template="""
-        Bạn là bộ phân loại chủ đề câu hỏi người dùng trong hệ thống chatbot dinh dưỡng.
+    classifier_llm = llm.with_structured_output(Topic)
 
-        Nhiệm vụ:
-        - Phân loại câu hỏi vào một trong các nhóm:
-            1. "meal_suggestion": khi người dùng yêu cầu gợi ý thực đơn cho cả một bữa ăn hoặc trong cả một ngày (chỉ cho bữa ăn, không cho món ăn đơn lẻ).
-            2. "food_suggestion": khi người dùng yêu cầu tìm kiếm hoặc gợi ý một món ăn duy nhất (có thể của một bữa nào đó).
-            3. "food_query": khi người dùng muốn tìm kiếm thông tin về một món ăn như tên, thành phần, dinh dưỡng, cách chế biến
-            4. "policy": khi người dùng muốn biết các thông tin liên quan đến app.
-            5. "general_chat": khi người dùng muốn hỏi đáp các câu hỏi chung liên quan đến sức khỏe, chất dinh dưỡng.
+    system_msg = """
+    Bạn là bộ điều hướng thông minh.
+    Nhiệm vụ: Phân loại câu hỏi của người dùng vào nhóm thích hợp.
 
-        Câu hỏi người dùng: {question}
+    CÁC NHÓM CHỦ ĐỀ:
+    1. "meal_suggestion": Gợi ý thực đơn ăn uống.
+    2. "food_suggestion": Tìm món ăn cụ thể.
+    3. "food_query": Hỏi thông tin dinh dưỡng món ăn.
+    4. "policy": Khi người dùng hỏi về quy định, chính sách, hướng dẫn sử dụng MỚI mà chưa có trong lịch sử.
+    5. "general_chat":
+       - Chào hỏi xã giao.
+       - Các câu hỏi sức khỏe chung chung.
+       - QUAN TRỌNG: Các câu hỏi NỐI TIẾP (Follow-up) yêu cầu giải thích, làm rõ thông tin ĐÃ CÓ trong lịch sử hội thoại (Ví dụ: "Giải thích ý đó", "Tại sao lại thế", "Cụ thể hơn đi").
 
-        Hãy trả lời dưới dạng JSON phù hợp với schema sau:
-        {format_instructions}
-        """
-    )
+    NGUYÊN TẮC ƯU TIÊN:
+    - Nếu câu hỏi mơ hồ (VD: "ý thứ 2 là gì", "nó hoạt động sao"), hãy kiểm tra lịch sử.
+    - Nếu câu trả lời cho câu hỏi đó ĐÃ NẰM trong tin nhắn trước của AI -> Chọn "general_chat" (để AI tự trả lời bằng trí nhớ).
+    - Chỉ chọn các topic chuyên biệt (policy/food...) khi cần tra cứu dữ liệu MỚI bên ngoài.
+    """
 
-    messages = state["messages"]
-    user_message = messages[-1].content if messages else state.question
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_msg),
+        MessagesPlaceholder(variable_name="history"),
+    ])
 
-    format_instructions = json.dumps(llm_with_structure_op.output_schema.model_json_schema(), ensure_ascii=False, indent=2)
+    chain = prompt | classifier_llm
 
-    chain = prompt | llm_with_structure_op
+    recent_messages = get_chat_history(state["messages"], max_tokens=500)
 
-    topic_result = chain.invoke({
-        "question": user_message,
-        "format_instructions": format_instructions
-    })
+    try:
+        topic_result = chain.invoke({"history": recent_messages})
+        topic_name = topic_result.name
+    except Exception as e:
+        print(f"⚠️ Lỗi phân loại: {e}")
+        topic_name = "general_chat"
 
-    logger.info(f"Topic: {topic_result.name}")
-
-    return {"topic": topic_result.name}
-
-def route_by_topic(state: AgentState):
-    topic = state["topic"]
-    if topic == "meal_suggestion":
-        return "meal_identify"
-    elif topic == "food_suggestion":
-        return "food_suggestion"
-    elif topic == "food_query":
-        return "food_query"
-    elif topic == "policy":
-        return "policy"
-    else:
-        return "general_chat"
-    
+    print(f"Topic detected: {topic_name}")
+    return {"topic": topic_name}    

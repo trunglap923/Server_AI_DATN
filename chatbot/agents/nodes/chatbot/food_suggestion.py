@@ -1,5 +1,4 @@
 from chatbot.agents.states.state import AgentState
-from chatbot.utils.user_profile import get_user_by_id
 from chatbot.agents.tools.food_retriever import query_constructor, food_retriever
 import logging
 
@@ -14,7 +13,7 @@ def food_suggestion(state: AgentState):
     messages = state["messages"]
     user_message = messages[-1].content if messages else state.question
 
-    user_profile = get_user_by_id(user_id)
+    user_profile = state.get("user_profile", {})
 
     suggested_meals = []
 

@@ -21,12 +21,11 @@ def llm_finalize_choice(state: SwapState):
     # 1. Format danh sách hiển thị kèm Real ID
     options_text = ""
     for item in top_candidates:
-        # Lấy meal_id thực tế từ dữ liệu
         real_id = item.get("meal_id")
 
         options_text += (
-            f"ID [{real_id}] - {item['name']}\n"  # <--- Hiển thị ID thật
-            f"   - Số liệu: {item['final_kcal']} Kcal | P:{item['final_protein']}g | L:{item['final_lipid']}g | C:{item['final_carb']}g\n"
+            f"ID [{real_id}] - {item['name']}\n" 
+            f"   - Số liệu: {item['final_kcal']} Kcal | P:{item['final_protein']}g | L:{item['final_totalfat']}g | C:{item['final_carbs']}g\n"
             f"   - Độ lệch (Loss): {item['optimization_loss']}\n"
         )
 
@@ -48,16 +47,15 @@ def llm_finalize_choice(state: SwapState):
         decision = llm_structured.invoke(system_prompt)
         target_id = decision.selected_meal_id
     except Exception as e:
-        logger.info(f"⚠️ LLM Error: {e}. Fallback to first option.")
+        logger.info(f"⚠️ Lỗi LLM: {e}. Fallback về option đầu tiên.")
         # Fallback lấy ID của món đầu tiên
         target_id = top_candidates[0].get("meal_id")
         decision = ChefDecision(selected_meal_id=target_id, reason="Fallback do lỗi hệ thống.")
 
-    # 4. Mapping lại bằng meal_id (Chính xác tuyệt đối)
+    # 4. Mapping lại bằng meal_id
     selected_full_candidate = None
 
     for item in top_candidates:
-        # So sánh ID (lưu ý ép kiểu nếu cần thiết để tránh lỗi string vs int)
         if int(item.get("meal_id")) == int(target_id):
             selected_full_candidate = item
             break
@@ -70,26 +68,22 @@ def llm_finalize_choice(state: SwapState):
     # Bổ sung lý do
     selected_full_candidate["chef_reason"] = decision.reason
 
-    # Bổ sung lý do
-    selected_full_candidate["chef_reason"] = decision.reason
-
     #-------------------------------------------------------------------
     # --- PHẦN MỚI: IN BẢNG SO SÁNH (VISUAL COMPARISON) ---
-    logger.info(f"\n✅ CHEF SELECTED: {selected_full_candidate['name']} (ID: {selected_full_candidate['meal_id']})")
+    logger.info(f"✅ CHEF SELECTED: {selected_full_candidate['name']} (ID: {selected_full_candidate['meal_id']})")
     logger.info(f"📝 Lý do: {decision.reason}")
 
     # Lấy thông tin món cũ (đã scale ở menu gốc)
-    # Lưu ý: food_old trong state là thông tin gốc hoặc đã tính toán ở daily menu
     old_kcal = float(food_old.get('final_kcal', food_old['kcal']))
     old_pro = float(food_old.get('final_protein', food_old['protein']))
-    old_fat = float(food_old.get('final_lipid', food_old['lipid']))
-    old_carb = float(food_old.get('final_carb', food_old['carbohydrate']))
+    old_fat = float(food_old.get('final_totalfat', food_old['totalfat']))
+    old_carb = float(food_old.get('final_carbs', food_old['carbs']))
 
     # Lấy thông tin món mới (đã re-scale bởi Scipy)
     new_kcal = selected_full_candidate['final_kcal']
     new_pro = selected_full_candidate['final_protein']
-    new_fat = selected_full_candidate['final_lipid']
-    new_carb = selected_full_candidate['final_carb']
+    new_fat = selected_full_candidate['final_totalfat']
+    new_carb = selected_full_candidate['final_carbs']
     scale = selected_full_candidate['portion_scale']
 
     # In bảng
@@ -101,7 +95,6 @@ def llm_finalize_choice(state: SwapState):
     logger.info(row_fmt.format(*headers))
     logger.info("   " + "-"*68)
 
-    # Helper in dòng
     def print_row(label, old_val, new_val, unit=""):
         diff = new_val - old_val
         diff_str = f"{diff:+.1f}"
@@ -120,7 +113,7 @@ def llm_finalize_choice(state: SwapState):
 
     print_row("Năng lượng", old_kcal, new_kcal, "Kcal")
     print_row("Protein", old_pro, new_pro, "g")
-    print_row("Lipid", old_fat, new_fat, "g")
+    print_row("TotalFat", old_fat, new_fat, "g")
     print_row("Carb", old_carb, new_carb, "g")
     logger.info("   " + "-"*68)
 

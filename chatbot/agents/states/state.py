@@ -1,30 +1,30 @@
 from typing import Annotated, Optional, Literal, Sequence, TypedDict, List, Dict, Any
 from langgraph.graph.message import add_messages
+from langchain_core.messages import AnyMessage
 
 class AgentState(TypedDict):
-    # ========== Thông tin cơ bản ==========
-    user_id: Optional[str]
-    question: str
+    user_id: Optional[str] = None
+    question: str = ""
 
-    # ========== Ngữ cảnh hội thoại ==========
-    topic: Optional[str]
-    user_profile: Optional[Dict[str, Any]]
+    topic: Optional[str] = None
+    user_profile: Optional[Dict[str, Any]] = None
 
-    # ========== Gợi ý & lựa chọn món ăn ==========
-    meals_to_generate: Optional[List[str]]
-    suggested_meals: Optional[List[Dict[str, Any]]]
+    missing_fields: List[str]
+    is_valid: bool
+    nutrition_goals: dict
 
-    # ========== Kết quả & phản hồi ==========
-    response: Optional[str]
-    messages: Annotated[list, add_messages]
+    meals_to_generate: Optional[List[str]] = None
+    suggested_meals: Optional[List[Dict[str, Any]]] = None
 
-    # ========== Mục tiêu & truy vấn ==========
     candidate_pool: List[dict]
     selected_structure: List[dict]
-    reason: Optional[str]
+    reason: Optional[str] = None
     final_menu: List[dict]
 
-    food_old: Optional[Dict[str, Any]]
+    response: Optional[str] = None
+    messages: Annotated[List[AnyMessage], add_messages]
+
+    food_old: Optional[Dict[str, Any]] = None
 
 class SwapState(TypedDict):
     user_profile: Dict[str, Any]

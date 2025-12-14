@@ -1,5 +1,6 @@
 from chatbot.agents.states.state import AgentState
 from chatbot.models.llm_setup import llm
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 import logging
 
 # --- Cấu hình logging ---
@@ -14,26 +15,24 @@ def select_food(state: AgentState):
     messages = state.get("messages", [])
     user_message = messages[-1].content if messages else state.get("question", "")
 
-    # 1. Format dữ liệu món ăn để đưa vào Prompt
     if not suggested_meals:
         return {"response": "Xin lỗi, tôi không tìm thấy món ăn nào phù hợp trong cơ sở dữ liệu."}
 
     meals_context = ""
     for i, doc in enumerate(suggested_meals):
         meta = doc.metadata
+        # Format kỹ hơn để LLM dễ đọc
         meals_context += (
-            f"Món {i+1}: {meta.get('name', 'Không tên')}\n"
-            f"   - Dinh dưỡng: {meta.get('kcal', '?')} kcal | "
-            f"P: {meta.get('protein', '?')}g | L: {meta.get('lipid', '?')}g | C: {meta.get('carbohydrate', '?')}g\n"
-            f"   - Mô tả/Thành phần: {doc.page_content}...\n"
+            f"--- Món {i+1} ---\n"
+            f"Tên: {meta.get('name', 'Không tên')}\n"
+            f"Dinh dưỡng (1 suất): {meta.get('kcal', '?')} kcal | "
+            f"Đạm: {meta.get('protein', '?')}g | Béo: {meta.get('totalfat', '?')}g | Carb: {meta.get('carbs', '?')}g\n"
+            f"Mô tả: {doc.page_content}\n\n"
         )
 
     # 2. Prompt Trả lời câu hỏi
-    # Prompt này linh hoạt hơn: Không ép chọn 1 món nếu user hỏi dạng liệt kê ("Tìm các món gà...")
     system_prompt = f"""
     Bạn là Trợ lý Dinh dưỡng AI thông minh.
-
-    CÂU HỎI: "{user_message}"
 
     DỮ LIỆU TÌM ĐƯỢC TỪ KHO MÓN ĂN:
     {meals_context}
@@ -46,11 +45,16 @@ def select_food(state: AgentState):
     Lưu ý: Chỉ sử dụng thông tin từ danh sách cung cấp, không bịa đặt số liệu.
     """
 
-    # Gọi LLM
-    response = llm.invoke(system_prompt)
-    content = response.content if hasattr(response, "content") else response
+    try:
+        response = llm.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_message)
+        ])
 
-    print("💬 AI Response:")
-    print(content)
+        logger.info("💬 AI Response:", response.content)
 
-    return {"response": content}
+        return {"messages": [response]}
+
+    except Exception as e:
+        logger.info(f"⚠️ Lỗi sinh câu trả lời: {e}")
+        return {"messages": [AIMessage(content="Đã xảy ra lỗi khi phân tích dữ liệu món ăn.")]}

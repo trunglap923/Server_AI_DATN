@@ -1,6 +1,7 @@
 from chatbot.agents.states.state import AgentState
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 from chatbot.models.llm_setup import llm
-from chatbot.agents.tools.info_app_retriever import policy_search
+from chatbot.agents.tools.info_app_retriever import policy_retriever
 import logging
 
 # --- Cấu hình logging ---
@@ -12,35 +13,40 @@ def policy(state: AgentState):
     messages = state["messages"]
     question = messages[-1].content if messages else state.question
 
-    if not question:
-        return {"response": "Chưa có câu hỏi."}
+    try:
+        docs = policy_retriever.invoke(question)
 
-    # Tạo retriever, lấy 3 doc gần nhất
-    policy_retriever = policy_search.as_retriever(search_kwargs={"k": 3})
+        if not docs:
+            return {"messages": [AIMessage(content="Xin lỗi, tôi không tìm thấy thông tin chính sách liên quan đến câu hỏi của bạn trong hệ thống.")]}
 
-    # Lấy các document liên quan
-    docs = policy_retriever.invoke(question)
+        context_text = "\n\n".join([d.page_content for d in docs])
 
-    if not docs:
-        return {"response": "Không tìm thấy thông tin phù hợp."}
+    except Exception as e:
+        logger.info(f"⚠️ Lỗi Policy Retriever: {e}")
+        return {"messages": [AIMessage(content="Hệ thống tra cứu chính sách đang gặp sự cố.")]}
 
-    # Gom nội dung các doc lại
-    context_text = "\n\n".join([doc.page_content for doc in docs])
+    system_prompt = f"""
+Bạn là Trợ lý AI hỗ trợ Chính sách & Quy định của Ứng dụng.
 
-    # Tạo prompt cho LLM
-    prompt_text = f"""
-Bạn là trợ lý AI chuyên về chính sách và thông tin app.
+NHIỆM VỤ:
+Trả lời câu hỏi người dùng CHỈ DỰA TRÊN thông tin được cung cấp dưới đây.
 
-Thông tin tham khảo từ hệ thống:
+THÔNG TIN THAM KHẢO:
 {context_text}
 
-Câu hỏi của người dùng: {question}
+QUY TẮC AN TOÀN:
+1. Nếu thông tin không có trong phần tham khảo, hãy trả lời: "Xin lỗi, hiện tại trong tài liệu chính sách không đề cập đến vấn đề này."
+2. Không được tự bịa ra chính sách hoặc đoán mò.
+3. Trả lời ngắn gọn, đi thẳng vào vấn đề.
+    """
 
-Hãy trả lời ngắn gọn, dễ hiểu, chính xác dựa trên thông tin có trong hệ thống.
-"""
+    try:
+        response = llm.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=question)
+        ])
 
-    # Gọi LLM
-    result = llm.invoke(prompt_text)
-    answer = result.content
+        return {"messages": [response]}
 
-    return {"response": answer}
+    except Exception as e:
+        return {"messages": [AIMessage(content="Lỗi khi tạo câu trả lời.")]}

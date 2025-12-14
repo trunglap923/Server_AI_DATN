@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 @tool("daily_meal_suggestion", return_direct=True)
-def daily_meal_suggestion(user_id: str, question: str, meals_to_generate: list):
+def daily_meal_suggestion(user_id: str, question: str, meals_to_generate: list, user_profile: dict):
     """
     Sinh thực đơn hàng ngày hoặc cho các bữa cụ thể dựa trên hồ sơ dinh dưỡng người dùng,
     câu hỏi và danh sách các bữa cần gợi ý.
@@ -24,12 +24,8 @@ def daily_meal_suggestion(user_id: str, question: str, meals_to_generate: list):
         question (str): Câu hỏi hoặc mong muốn cụ thể của người dùng
                         (VD: "Tôi muốn gợi ý bữa trưa và bữa tối").
         meals_to_generate (list): Danh sách các bữa cần sinh thực đơn, ví dụ ["trưa", "tối"].
+        user_profile (dict): Thông tin về nhu cầu dinh dưỡng của người dùng.
     """
-
-    logger.info(f"Tool daily_meal_suggestion invoked: user_id={user_id}, meals={meals_to_generate}")
-    if not isinstance(meals_to_generate, list):
-        logger.warning("meals_to_generate không phải list, ép về list")
-        meals_to_generate = list(meals_to_generate)
 
     workflow = meal_plan_graph()
 
@@ -37,6 +33,7 @@ def daily_meal_suggestion(user_id: str, question: str, meals_to_generate: list):
         "user_id": user_id,
         "question": question,
         "meals_to_generate": meals_to_generate,
+        "user_profile": user_profile
     })
 
     return result
