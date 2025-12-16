@@ -31,7 +31,7 @@ def classify_topic(state: AgentState):
     1. "meal_suggestion": Gợi ý thực đơn ăn uống.
     2. "food_suggestion": Tìm món ăn cụ thể.
     3. "food_query": Hỏi thông tin dinh dưỡng món ăn.
-    4. "policy": Khi người dùng hỏi về quy định, chính sách, hướng dẫn sử dụng MỚI mà chưa có trong lịch sử.
+    4. "policy": Khi người dùng hỏi về thông tin, đặc điểm, quy định, chính sách, hướng dẫn sử dụng MỚI mà chưa có trong lịch sử (liên quan đến app).
     5. "general_chat":
        - Chào hỏi xã giao.
        - Các câu hỏi sức khỏe chung chung.

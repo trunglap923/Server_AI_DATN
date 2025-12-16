@@ -39,6 +39,7 @@ QUY TẮC AN TOÀN:
 2. Không được tự bịa ra chính sách hoặc đoán mò.
 3. Trả lời ngắn gọn, đi thẳng vào vấn đề.
     """
+    logger.info(f"Prompt gửi đến LLM cho chính sách: {system_prompt}")
 
     try:
         response = llm.invoke([

@@ -1,2 +1,0 @@
-a = []
-print(not a)

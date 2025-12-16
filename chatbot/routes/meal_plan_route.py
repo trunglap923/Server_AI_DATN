@@ -39,7 +39,6 @@ def generate_meal_plan(request: Request):
         final_state = meal_app.invoke(initial_state)
         response = {
             "final_menu": final_state["final_menu"],
-            "reason": final_state["reason"]
         }
         
         if not response["final_menu"]:

@@ -3,6 +3,7 @@ import logging
 from chatbot.agents.states.state import AgentState
 from chatbot.agents.tools.food_retriever import food_retriever_50, docsearch
 from chatbot.knowledge.vibe import vibes_cooking, vibes_flavor, vibes_healthy, vibes_soup_veg, vibes_style
+import time
 
 STAPLE_IDS = ["112", "1852", "2236", "2386", "2388"]
 
@@ -51,11 +52,11 @@ def generate_food_candidates(state: AgentState):
     health_status = profile.get('healthStatus', '') # VD: Suy thận
 
     constraint_prompt = ""
-    if restrictions:
+    if restrictions not in ["Không có"]:
         constraint_prompt += f"Yêu cầu bắt buộc: {restrictions}. "
     if health_status not in ["Khỏe mạnh", "Không có", "Bình thường", None]:
         constraint_prompt += f"Phù hợp người bệnh: {health_status}. "
-    if diet_mode:
+    if diet_mode not in ["Bình thường"]:
         constraint_prompt += f"Chế độ: {diet_mode}."
 
     prompt_templates = {
@@ -80,7 +81,10 @@ def generate_food_candidates(state: AgentState):
             final_query = f"{base_prompt} Phong cách: {vibe}.{' Ràng buộc: ' + numerical_query if numerical_query else ''}"
             logger.info(f"🔎 Query ({meal_type}): {final_query}")
 
+            time_start = time.time()
             docs = food_retriever_50.invoke(final_query)
+            time_end = time.time()
+            logger.info(f"Thời gian thực thi: {round(time_end - time_start, 2)}s")
             if not docs:
                 logger.warning(f"⚠️ Retriever trả về rỗng cho bữa: {meal_type}")
                 continue
@@ -286,7 +290,7 @@ def rank_candidates(candidates, user_profile, meal_type):
     scored_list.sort(key=lambda x: x["health_score"], reverse=True)
 
     # # Debug: In Top 3
-    # logger.info("🏆 Top 3 Món Tốt Nhất (Sau khi chấm điểm):")
+    # logger.info("Top 3 Món Tốt Nhất (Sau khi chấm điểm):")
     # for i, m in enumerate(scored_list[:3]):
     #     logger.info(f"   {i+1}. {m['name']} (Score: {m['health_score']}) | {m.get('score_reason')}")
 

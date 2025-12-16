@@ -2,6 +2,7 @@ from langchain_core.pydantic_v1 import BaseModel, Field
 from chatbot.models.llm_setup import llm
 from chatbot.agents.states.state import SwapState
 import logging
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -44,7 +45,10 @@ def llm_finalize_choice(state: SwapState):
     # 3. Gọi LLM
     try:
         llm_structured = llm.with_structured_output(ChefDecision)
+        time_start = time.time()
         decision = llm_structured.invoke(system_prompt)
+        time_end = time.time()
+        logger.info(f"⏱️ Thời gian LLM: {time_end - time_start:.2f} giây")
         target_id = decision.selected_meal_id
     except Exception as e:
         logger.info(f"⚠️ Lỗi LLM: {e}. Fallback về option đầu tiên.")

@@ -11,7 +11,6 @@ def optimize_portions_scipy(state: AgentState):
     logger.info("---NODE: SCIPY OPTIMIZER (FINAL VERSION)---")
     profile = state.get("user_profile", {})
     menu = state.get("selected_structure", [])
-    reason = state.get("reason", "")
 
     if not menu:
         print("⚠️ Menu rỗng, bỏ qua tối ưu hóa.")
@@ -122,7 +121,7 @@ def optimize_portions_scipy(state: AgentState):
                     d = (current_meal_kcal - target_meal) / (target_meal + 1e-5)
                     loss_dist += (d ** 2)
 
-            return loss_macro + (1.5 * loss_dist)
+            return 3 * loss_macro + loss_dist
 
         # 5. Run Optimization
         logger.info("Đang tối ưu hóa phần suất món ăn...")
@@ -206,6 +205,5 @@ def optimize_portions_scipy(state: AgentState):
 
     return {
         "final_menu": final_menu,
-        "reason": reason,
         "user_profile": profile
     }

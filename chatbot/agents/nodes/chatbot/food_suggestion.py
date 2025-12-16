@@ -23,8 +23,8 @@ def food_suggestion(state: AgentState):
     Hãy tìm các món ăn phù hợp với khẩu phần và yêu cầu này, cho phép sai lệch không quá 20%.
     """
 
-    query_ans = query_constructor.invoke(prompt)
-    logger.info(f"🔍 Dạng truy vấn: {food_retriever.structured_query_translator.visit_structured_query(structured_query=query_ans)}")
+    # query_ans = query_constructor.invoke(prompt)
+    # logger.info(f"🔍 Dạng truy vấn: {food_retriever.structured_query_translator.visit_structured_query(structured_query=query_ans)}")
     foods = food_retriever.invoke(prompt)
     logger.info(f"🔍 Kết quả truy vấn: ")
     for i, food in enumerate(foods):

@@ -21,22 +21,23 @@ def find_replacement_candidates(state: SwapState):
     health_status = profile.get('healthStatus', '') # VD: Suy thận
 
     constraint_prompt = ""
-    if restrictions:
+    if restrictions not in ["Không có"]:
         constraint_prompt += f"Yêu cầu bắt buộc: {restrictions}. "
-    if health_status:
+    if health_status not in ["Khỏe mạnh", "Không có", "Bình thường", None]:
         constraint_prompt += f"Phù hợp người bệnh: {health_status}. "
-    if diet_mode:
+    if diet_mode not in ["Bình thường"]:
         constraint_prompt += f"Chế độ: {diet_mode}."
 
     # 1. Trích xuất ngữ cảnh từ món cũ
     role = food_old.get("role", "main")       # VD: main, side, carb
+    vibe = food_old.get("retrieval_vibe", "Món ăn kèm cơ bản")          # VD: món nhẹ nhàng, món giàu đạm
     meal_type = food_old.get("assigned_meal", "trưa") # VD: trưa
     old_name = food_old.get("name", "")
     numerical_query = generate_numerical_constraints(profile, meal_type)
 
     # 2. Xây dựng Query tự nhiên để SelfQueryRetriever hiểu
     query = (
-        f"Tìm các món ăn đóng vai trò '{role}' phù hợp cho bữa '{meal_type}'. "
+        f"Tìm các món ăn đóng vai trò '{role}' phù hợp cho bữa '{meal_type}'. Phong cách: '{vibe}'. "
         f"Khác với món '{old_name}'. "
         f"{constraint_prompt}"
     )
