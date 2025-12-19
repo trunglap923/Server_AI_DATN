@@ -80,7 +80,8 @@ YÊU CẦU TRÌNH BÀY:
 3. So sánh tổng thực tế với mục tiêu người dùng (Sai số bao nhiêu %).
 4. Đưa ra lời khuyên về cách phân bổ các chất này trong ngày.
 5. Tuyệt đối KHÔNG bịa đặt con số ngoài dữ liệu đã cho.
-6. Trả lời một cách ngắn gọn không dài dòng.
+6. Không dùng bảng để trình bày.
+7. Trả lời một cách ngắn gọn không dài dòng.
 """
     print(f"👉 Prompt: {system_prompt}")
 
