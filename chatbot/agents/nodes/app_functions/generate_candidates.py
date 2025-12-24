@@ -1,5 +1,6 @@
 import random
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from chatbot.agents.states.state import AgentState
 from chatbot.agents.tools.food_retriever import food_retriever_50, docsearch
 from chatbot.knowledge.vibe import vibes_cooking, vibes_flavor, vibes_healthy, vibes_soup_veg, vibes_style
@@ -10,6 +11,56 @@ STAPLE_IDS = ["112", "1852", "2236", "2386", "2388"]
 # --- Cấu hình logging ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def _process_single_meal(meal_type, profile, prompt_templates):
+    candidates = []
+    try:
+        # 1. Chuẩn bị Query
+        base_prompt = prompt_templates.get(meal_type, f"Món ăn {meal_type}.")
+        
+        try:
+            vibe = get_random_vibe(meal_type)
+            numerical_query = generate_numerical_constraints(profile, meal_type)
+        except Exception as e:
+            logger.error(f"⚠️ Lỗi tạo vibe/constraints cho bữa {meal_type}: {e}")
+            vibe = "Hài hòa"
+            numerical_query = ""
+
+        final_query = f"{base_prompt} Phong cách: {vibe}.{' Ràng buộc: ' + numerical_query if numerical_query else ''}"
+        logger.info(f"🔎 Query ({meal_type}): {final_query}")
+
+        # 2. Gọi Retriever
+        time_start = time.time()
+        docs = food_retriever_50.invoke(final_query)
+        time_end = time.time()
+        
+        logger.info(f"⏱️ Bữa {meal_type} xong trong {round(time_end - time_start, 2)}s")
+
+        if not docs:
+            logger.warning(f"⚠️ Không tìm thấy món nào cho bữa: {meal_type}")
+            return []
+
+        # 3. Ranking & Selection
+        ranked_items = rank_candidates(docs, profile, meal_type)
+
+        if ranked_items:
+            top_n_count = min(len(ranked_items), 30)
+            top_candidates = ranked_items[:top_n_count]
+            random.shuffle(top_candidates)
+
+            k = 10
+            selected_docs = top_candidates[:k]
+
+            for item in selected_docs:
+                candidate = item.copy()
+                candidate["meal_type_tag"] = meal_type
+                candidate["retrieval_vibe"] = vibe
+                candidates.append(candidate)
+                
+    except Exception as e:
+        logger.error(f"🔥 LỖI trong thread bữa {meal_type}: {e}")
+    
+    return candidates
 
 def generate_food_candidates(state: AgentState):
     logger.info("---NODE: RETRIEVAL CANDIDATES (ADVANCED PROFILE)---")
@@ -65,55 +116,33 @@ def generate_food_candidates(state: AgentState):
         "tối":  f"Món ăn tối, nhẹ bụng. {constraint_prompt}",
     }
 
-    for meal_type in meals:
-        try:
-            logger.info(meal_type)
-            base_prompt = prompt_templates.get(meal_type, f"Món ăn {meal_type}. {constraint_prompt}")
-            
+    num_workers = min(len(meals), 3) if meals else 1
+    
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        future_to_meal = {
+            executor.submit(_process_single_meal, meal, profile, prompt_templates): meal 
+            for meal in meals
+        }
+
+        for future in as_completed(future_to_meal):
+            meal = future_to_meal[future]
             try:
-                vibe = get_random_vibe(meal_type)
-                numerical_query = generate_numerical_constraints(profile, meal_type)
-            except Exception as sub_e:
-                logger.error(f"Lỗi logic phụ (vibe/numerical) cho bữa {meal_type}: {sub_e}")
-                vibe = "Hài hòa"
-                numerical_query = ""
+                result_candidates = future.result()
+                candidates.extend(result_candidates)
+            except Exception as exc:
+                logger.error(f"❌ Thread bữa {meal} bị crash: {exc}")
 
-            final_query = f"{base_prompt} Phong cách: {vibe}.{' Ràng buộc: ' + numerical_query if numerical_query else ''}"
-            logger.info(f"🔎 Query ({meal_type}): {final_query}")
+    unique_candidates = {}
+    for item in candidates:
+        key = str(item.get('id') or item.get('meal_id') or item.get('name'))
+        unique_candidates[key] = item
+    
+    final_pool = list(unique_candidates.values())
 
-            time_start = time.time()
-            docs = food_retriever_50.invoke(final_query)
-            time_end = time.time()
-            logger.info(f"Thời gian thực thi: {round(time_end - time_start, 2)}s")
-            if not docs:
-                logger.warning(f"⚠️ Retriever trả về rỗng cho bữa: {meal_type}")
-                continue
-
-            ranked_items = rank_candidates(docs, profile, meal_type)
-            
-            if ranked_items:
-                top_n_count = min(len(ranked_items), 30)
-                top_candidates = ranked_items[:top_n_count]
-                random.shuffle(top_candidates)
-                
-                k = min(20, top_n_count) if len(meals) == 1 else min(10, top_n_count)
-                selected_docs = top_candidates[:k]
-
-                for item in selected_docs:
-                    candidate = item.copy()
-                    candidate["meal_type_tag"] = meal_type
-                    candidate["retrieval_vibe"] = vibe
-                    candidates.append(candidate)
-        
-        except Exception as e:
-            logger.error(f"🔥 LỖI NGHIÊM TRỌNG khi retrieve bữa {meal_type}: {e}")
-            continue
-
-    unique_candidates = {v.get('name', 'Unknown'): v for v in candidates}.values()
-    final_pool = list(unique_candidates)
-    logger.info(f"📚 Candidate Pool Size: {len(final_pool)} món")
-    if len(final_pool) == 0:
-        logger.critical("❌ KHÔNG TÌM THẤY MÓN NÀO! Check lại DB connection.")
+    logger.info(f"📚 Tổng Candidate Pool Size: {len(final_pool)} món")
+    
+    if not final_pool:
+        logger.critical("❌ KHÔNG TÌM THẤY MÓN NÀO! Vui lòng kiểm tra lại DB connection hoặc Query.")
     return {"candidate_pool": final_pool, "meals_to_generate": meals}
 
 def generate_numerical_constraints(user_profile, meal_type):

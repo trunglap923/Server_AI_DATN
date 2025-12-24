@@ -17,7 +17,7 @@ def get_user_by_id(user_id: int):
     }
 
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=3)
         response.raise_for_status()
 
         result = response.json()
