@@ -6,6 +6,7 @@ venv/
 
 __pycache__/
 
+chatbot
 collection
 createDB
 database
